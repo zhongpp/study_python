@@ -1,0 +1,130 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+import json
+import requests
+import pymysql
+
+
+def covert():
+    db = pymysql.connect("mysql", "root", "1qaz!QAZ", "test",charset="utf8")
+    with open("source_datas.json", encoding='utf-8') as fr:
+        content = fr.read()
+        datas = json.loads(content)
+        print(len(datas["RECORDS"]))
+        count = 0
+        for data in datas["RECORDS"]:
+            try:
+                uuid = data["appointment_no"]
+
+                # 收件点
+                country = json.loads(data["content"])["expressInfoList"][0]["originateInfo"]["addressInfo"]["country"]
+                province = json.loads(data["content"])["expressInfoList"][0]["originateInfo"]["addressInfo"]["province"]
+                city = json.loads(data["content"])["expressInfoList"][0]["originateInfo"]["addressInfo"]["city"]
+                county = json.loads(data["content"])["expressInfoList"][0]["originateInfo"]["addressInfo"]["county"]
+                address = json.loads(data["content"])["expressInfoList"][0]["originateInfo"]["addressInfo"]["address"]
+                originate_address = str(country + province + city + county + address)
+
+                # 派件点
+                country = json.loads(data["content"])["expressInfoList"][0]["destinationInfo"]["addressInfo"]["country"]
+                province = json.loads(data["content"])["expressInfoList"][0]["destinationInfo"]["addressInfo"][
+                    "province"]
+                city = json.loads(data["content"])["expressInfoList"][0]["destinationInfo"]["addressInfo"]["city"]
+                county = json.loads(data["content"])["expressInfoList"][0]["destinationInfo"]["addressInfo"]["county"]
+                address = json.loads(data["content"])["expressInfoList"][0]["destinationInfo"]["addressInfo"]["address"]
+                destination_address = str(country + province + city + county + address)
+
+                print(originate_address, destination_address)
+
+                baidu_originate_json = baidu_address_covert(originate_address)
+                print(baidu_originate_json['precise'])
+                print(baidu_originate_json['confidence'])
+
+                baidu_destination_json = baidu_address_covert(destination_address)
+                print(baidu_destination_json['precise'])
+                print(baidu_destination_json['confidence'])
+
+                geo_originate_location = geo_address_covert(originate_address)
+                geo_destination_location = geo_address_covert(destination_address)
+
+                baidu_originate_location = "%s,%s" % (
+                baidu_originate_json['location']['lat'], baidu_originate_json['location']['lng'])
+                baidu_destination_location = "%s,%s" % (
+                baidu_destination_json['location']['lat'], baidu_destination_json['location']['lng'])
+
+                print(baidu_originate_location, baidu_destination_location, geo_originate_location,
+                      geo_destination_location)
+                baidu_distance = baidu_transit(baidu_originate_location, baidu_destination_location)
+                geo_distance = geo_transit(geo_originate_location, geo_destination_location)
+
+                print(baidu_distance, geo_distance, abs(baidu_distance - geo_distance))
+                cursor = db.cursor()
+                sql_insert = "insert into dw_requests(uuid,originate_address,destination_address,baidu_originate_location,geo_originate_location, baidu_destination_location,geo_destination_location,baidu_originate_precise,baidu_originate_confidence,baidu_destination_precise, baidu_destination_confidence,baidu_distance,geo_distance,gap) values('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s')" % (
+                uuid, originate_address, destination_address, baidu_originate_location, geo_originate_location,
+                baidu_destination_location, geo_destination_location, baidu_originate_json['precise'],
+                baidu_originate_json['confidence'], baidu_destination_json['precise'],
+                baidu_destination_json['confidence'], baidu_distance, geo_distance, abs(baidu_distance - geo_distance))
+                try:
+                    cursor.execute(sql_insert)
+                    # 提交
+                    db.commit()
+                except Exception as e:
+                    # 错误回滚
+                    print("插入数据异常：%s" % e)
+                    db.rollback()
+            except Exception as exception:
+                print("获取地理信息出现异常：%s" % exception)
+                pass
+    db.close()
+
+
+# 百度地图
+ak = "jwIc3hYW05E87k5GwLv0CIeUMSFRYoy2"
+
+
+# 地址解析成坐标信息
+def baidu_address_covert(address):
+    # 收件点
+    url = "http://api.map.baidu.com/geocoder/v2/?address={%s}&output=json&ak=%s" % (address, ak)
+    resp = requests.get(url)
+    return resp.json()['result']
+
+
+# 路径规划
+def baidu_transit(destination_location, originate_location):
+    url = 'http://api.map.baidu.com/direction/v2/transit?origin=%s&destination=%s&ak=%s' % (
+        destination_location, originate_location, ak)
+    resp = requests.get(url)
+    distance = resp.json()['result']['routes'][0]['distance']
+    return distance
+
+
+# 高德地图
+key = "45b13ff5fdf4673832f5b3ac6098409e"
+
+
+# 地址解析成坐标信息
+def geo_address_covert(address):
+    url = "http://restapi.amap.com/v3/geocode/geo?address=%s&output=json&key=%s" % (address, key)
+    resp = requests.get(url)
+    return resp.json()['geocodes'][0]['location']
+
+
+# 路径规划
+def geo_transit(destination_location, originate_location):
+    url = "http://restapi.amap.com/v3/direction/driving?origin=%s&destination=%s&city=010&output=json&key=%s" % (
+        destination_location, originate_location, key)
+    resp = requests.get(url)
+    routes = resp.json()["route"]
+    distance = 0
+    for data in routes["paths"]:
+        distance += int(data["distance"])
+    return distance
+
+
+if __name__ == '__main__':
+    covert()
+    # print(baidu_address_covert("浙江省杭州市西湖区之江发展大厦105商铺星云售楼中心"))
+    # print(geo_address_covert("浙江省杭州市西湖区之江发展大厦105商铺星云售楼中心"))
+    # baidu_transit("40.056878,116.30815", "31.222965,121.505821")
+    # geo_transit("116.30815,40.056878", "121.505821,31.222965")
